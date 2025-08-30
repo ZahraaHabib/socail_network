@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useWebSocket } from '@/hooks/useWebSocket';
+import { useAuth } from '../context/AuthContext';
 import UserList from './UserList';
 
 interface User {
@@ -49,8 +49,10 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
   const unmountingRef = useRef(false);
   const lastSelectedUserRef = useRef<User | null>(null);
 
-  // WebSocket hook
-  const { isConnected, onMessage, sendMessage: wsSendMessage } = useWebSocket();
+  // Use global WebSocket from AuthProvider
+  const { wsConnected: isConnected, onMessage, sendMessage: wsSendMessage } = useAuth();
+  // Fallback if wsSendMessage is null
+  const safeSendMessage = wsSendMessage || (() => false);
 
   // Fetch users on mount
   useEffect(() => {
@@ -214,7 +216,7 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
     if (selectedUser) {
-      wsSendMessage('typing_indicator', { receiver_id: selectedUser.id, is_typing: true });
+      safeSendMessage('typing_indicator', { receiver_id: selectedUser.id, is_typing: true });
     }
   };
 

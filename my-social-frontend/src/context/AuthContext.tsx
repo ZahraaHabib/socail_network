@@ -10,6 +10,7 @@ type AuthContextType = {
   wsConnected: boolean;
   onMessage: ((type: string, handler: (data: any) => void) => void) | null;
   sendGroupMessage: ((groupId: number, content: string) => boolean) | null;
+  sendMessage: ((type: string, data: any) => boolean) | null;
   disconnect: (() => void) | null;
   // Online user management
   onlineUsers: Set<number>;
@@ -71,11 +72,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   }, [onMessage, wsConnected]);
 
+  // Re-check authentication on every route change
   useEffect(() => {
-    fetch('http://localhost:8080/v2/users/me', { credentials: 'include' })
-      .then(res => setIsAuthenticated(res.ok))
-      .catch(() => setIsAuthenticated(false))
-      .finally(() => setLoading(false));
+    const checkAuth = () => {
+      fetch('http://localhost:8080/v2/users/me', { credentials: 'include' })
+        .then(res => setIsAuthenticated(res.ok))
+        .catch(() => setIsAuthenticated(false))
+        .finally(() => setLoading(false));
+    };
+    checkAuth();
+    // Listen for route changes
+    const handleRouteChange = () => {
+      checkAuth();
+    };
+    window.addEventListener('popstate', handleRouteChange);
+    window.addEventListener('pushstate', handleRouteChange);
+    window.addEventListener('replacestate', handleRouteChange);
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange);
+      window.removeEventListener('pushstate', handleRouteChange);
+      window.removeEventListener('replacestate', handleRouteChange);
+    };
   }, []);
 
   return (
@@ -83,10 +100,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated, 
       setIsAuthenticated, 
       loading,
-      wsConnected,
-      onMessage,
-      sendGroupMessage,
-      disconnect,
+  wsConnected,
+  onMessage,
+  sendGroupMessage,
+  sendMessage,
+  disconnect,
       onlineUsers
     }}>
       {children}
