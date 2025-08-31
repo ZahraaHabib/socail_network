@@ -35,7 +35,8 @@ func checkShouldReceiveInstantMessage(senderID, receiverID int64) (bool, error) 
 	// Check if recipient is following the sender
 	var isFollowing bool
 	err := database.DB.QueryRow(`
-        SELECT EXISTS(
+
+	SELECT EXISTS(
             SELECT 1 FROM followers 
             WHERE follower_id = ? AND followed_id = ? AND status = 'accept'
         )
@@ -155,24 +156,30 @@ func SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get sender username for the broadcast
-	var senderUsername string
-	err = database.DB.QueryRow("SELECT username FROM users WHERE id = ?", senderID).Scan(&senderUsername)
+	// Get sender username and avatar for the broadcast, using COALESCE for avatar
+	var senderUsername, senderAvatar string
+	err = database.DB.QueryRow("SELECT username, COALESCE(avatar, '') FROM users WHERE id = ?", senderID).Scan(&senderUsername, &senderAvatar)
 	if err != nil {
-		log.Printf("Error getting sender username: %v", err)
+		log.Printf("Error getting sender username/avatar: %v", err)
 		senderUsername = "Unknown"
+		senderAvatar = ""
+	}
+	// Ensure avatar URL is absolute if needed
+	if senderAvatar != "" && !strings.HasPrefix(senderAvatar, "http") {
+		senderAvatar = fmt.Sprintf("http://localhost:8080/%s", strings.TrimLeft(senderAvatar, "/"))
 	}
 
-	// Create message response for broadcasts
-	messageResponse := models.MessageResponse{
-		ID:             messageID,
-		SenderID:       senderID,
-		ReceiverID:     receiverID,
-		SenderUsername: senderUsername,
-		Content:        req.Content,
-		IsRead:         false,
-		CreatedAt:      now,
-		IsSentByViewer: false,
+	// Create message response for broadcasts, now including sender_avatar
+	messageResponse := map[string]interface{}{
+		"id":                messageID,
+		"sender_id":         senderID,
+		"receiver_id":       receiverID,
+		"sender_username":   senderUsername,
+		"sender_avatar":     senderAvatar,
+		"content":           req.Content,
+		"is_read":           false,
+		"created_at":        now,
+		"is_sent_by_viewer": false,
 	}
 
 	// 1. MESSAGE DELIVERY CONFIRMATION
@@ -216,11 +223,26 @@ func SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 			notificationMessage = fmt.Sprintf("You have a new message from %s", senderUsername)
 		}
 
+		// Get sender username and avatar for popup notification, using COALESCE for avatar
+		var senderUsernamePopup, senderAvatarPopup string
+		err = database.DB.QueryRow("SELECT username, COALESCE(avatar, '') FROM users WHERE id = ?", senderID).Scan(&senderUsernamePopup, &senderAvatarPopup)
+		if err != nil {
+			log.Printf("Error getting sender username/avatar for popup: %v", err)
+			senderUsernamePopup = senderUsername // fallback
+			senderAvatarPopup = ""
+		}
+		// If avatar is a base64 data URL, use as is; otherwise, ensure absolute URL if needed
+		if senderAvatarPopup != "" && !strings.HasPrefix(senderAvatarPopup, "http") && !strings.HasPrefix(senderAvatarPopup, "data:image/") {
+			senderAvatarPopup = fmt.Sprintf("http://localhost:8080/%s", strings.TrimLeft(senderAvatarPopup, "/"))
+		}
+		// Debug log for avatar value used in popup
+		log.Printf("Popup sender avatar for user %d: %s", senderID, senderAvatarPopup)
 		// Send popup message notification via WebSocket (separate from general notifications)
 		log.Printf("Sending popup notification to user %d for offline/delayed message", receiverID)
 		BroadcastToUser(receiverID, "new_message_popup", map[string]interface{}{
 			"sender_id":       senderID,
-			"sender_username": senderUsername,
+			"sender_username": senderUsernamePopup,
+			"sender_avatar":   senderAvatarPopup,
 			"message":         notificationMessage,
 			"message_id":      messageID,
 			"content":         req.Content,
@@ -556,9 +578,9 @@ func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	// Mark messages from other user as read and get their IDs for read receipts
 	var readMessageIDs []int64
 	readRows, err := database.DB.Query(`
-        SELECT id FROM private_messages 
-        WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE
-    `, otherUserID, userID)
+		SELECT id FROM private_messages 
+		WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE
+	`, otherUserID, userID)
 	if err == nil {
 		defer readRows.Close()
 		for readRows.Next() {
@@ -571,21 +593,20 @@ func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Mark messages as read
 	_, err = database.DB.Exec(`
-        UPDATE private_messages 
-        SET is_read = TRUE 
-        WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE
-    `, otherUserID, userID)
+		UPDATE private_messages 
+		SET is_read = TRUE 
+		WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE
+	`, otherUserID, userID)
 	if err != nil {
 		log.Printf("Error marking messages as read: %v", err)
 	}
 
 	// Send read receipts for each message that was just marked as read
-	now := time.Now()
 	for _, msgID := range readMessageIDs {
 		BroadcastToUser(otherUserID, "message_read", map[string]interface{}{
 			"message_id": msgID,
 			"read_by":    userID,
-			"read_at":    now,
+			// Removed 'read_at' field since it does not exist in the database
 		})
 	}
 
@@ -676,11 +697,10 @@ func MarkMessageAsReadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send read receipt to sender
-	now := time.Now()
 	BroadcastToUser(senderID, "message_read", map[string]interface{}{
 		"message_id": messageID,
 		"read_by":    userID,
-		"read_at":    now,
+		// Removed 'read_at' field since it does not exist in the database
 	})
 
 	// Broadcast updated unread message count to receiver

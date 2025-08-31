@@ -9,6 +9,7 @@ type MessagePopup = {
   id: string;
   sender_id: number;
   sender_username: string;
+  sender_avatar?: string;
   message: string;
   content: string;
   created_at: string;
@@ -40,7 +41,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
     if (!onMessage || !wsConnected || !isAuthenticated) return;
 
     // Listen for new message popups (this is the primary popup notification system)
-    onMessage('new_message_popup', (data: { sender_id: number; sender_username: string; message: string; content: string; created_at: string; message_id?: string }) => {
+  onMessage('new_message_popup', (data: { sender_id: number; sender_username: string; sender_avatar?: string; message: string; content: string; created_at: string; message_id?: string }) => {
       // Don't show popup if user is on chat page
       if (isOnChatPage) return;
       const messageKey = `${data.sender_id}-${data.message_id || Date.now()}`;
@@ -49,6 +50,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
         id: `popup-${messageKey}`,
         sender_id: data.sender_id || 0,
         sender_username: data.sender_username || 'Unknown',
+        sender_avatar: data.sender_avatar || '',
         message: data.message || 'New message',
         content: data.content || '',
         created_at: data.created_at || new Date().toISOString(),
@@ -68,7 +70,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
     });
 
     // Listen for group chat notifications
-    onMessage('group_message_notification', (data: { group_id: number; group_message_id: string; sender_id: number; sender_username: string; content: string; created_at: string }) => {
+  onMessage('group_message_notification', (data: { group_id: number; group_message_id: string; sender_id: number; sender_username: string; sender_avatar?: string; content: string; created_at: string }) => {
       if (isOnChatPage) return;
       const messageKey = `group-${data.group_id}-${data.group_message_id}`;
       if (recentMessageIds.has(messageKey)) return;
@@ -79,6 +81,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
         id: `group-popup-${messageKey}`,
         sender_id: data.sender_id || 0,
         sender_username: data.sender_username || 'Unknown',
+        sender_avatar: data.sender_avatar || '',
         message: `New group message in ${groupTitle}`,
         content: data.content || '',
         created_at: data.created_at || new Date().toISOString(),
@@ -99,7 +102,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
     });
 
     // Listen for instant new messages (backup - only show if not on chat page)
-    onMessage('new_message', (data: { sender_id: number; id?: string; sender_username: string; content: string; created_at: string; is_sent_by_viewer?: boolean }) => {
+  onMessage('new_message', (data: { sender_id: number; id?: string; sender_username: string; sender_avatar?: string; content: string; created_at: string; is_sent_by_viewer?: boolean }) => {
       
       // Don't show popup if user is on chat page - the chat component handles this
       if (isOnChatPage) return;
@@ -119,6 +122,7 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
         id: `instant-${messageKey}`,
         sender_id: data.sender_id || 0,
         sender_username: data.sender_username || 'Unknown',
+        sender_avatar: data.sender_avatar || '',
         message: `New message from ${data.sender_username || 'Unknown'}`,
         content: data.content || '',
         created_at: data.created_at || new Date().toISOString(),
@@ -206,52 +210,32 @@ export default function MessagePopupNotifications({ allGroups, setSelectedGroup,
   if (!isAuthenticated || popups.length === 0) return null;
 
   return (
-    <div className="fixed top-20 right-4 z-50 space-y-2">
-      {popups.map((popup) => (
-        <div
-          key={popup.id}
-          className="bg-white border border-gray-200 rounded-lg shadow-lg p-4 max-w-sm animate-slide-in-right cursor-pointer"
-          onClick={() => {
-            if (popup.group_id) {
-              const groupList = Array.isArray(allGroups) ? allGroups : [];
-              const group = groupList.find(g => g.id === popup.group_id);
-              if (group) {
-                setSelectedGroup(group);
-                setActiveTab('chat'); // Use 'chat' as the default GroupTab value
-              }
-            }
-            removePopup(popup.id);
-          }}
-        >
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-blue-600 font-medium">💬</span>
-                <h4 className="text-sm font-semibold text-gray-900">
-                  {popup.sender_username}
-                </h4>
-              </div>
-              <p className="text-sm text-gray-600 mb-1">
-                {popup.message}
-              </p>
-              {popup.content && (
-                <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded italic">
-                  &quot;{popup.content.length > 50 ? popup.content.substring(0, 50) + '...' : popup.content}&quot;
-                </p>
-              )}
-              <p className="text-xs text-gray-400 mt-1">
-                {new Date(popup.created_at).toLocaleTimeString()}
-              </p>
-            </div>
-            <button
-              onClick={e => { e.stopPropagation(); removePopup(popup.id); }}
-              className="text-gray-400 hover:text-gray-600 ml-2"
-            >
-              ✕
-            </button>
+  <div className="fixed bottom-6 right-6 z-[9999] space-y-3">
+    {popups.map((popup) => (
+      <div
+        key={popup.id}
+        className="flex items-center gap-3 px-5 py-3 rounded-xl shadow-md border border-blue-200 bg-white animate-slide-in-right cursor-pointer"
+        style={{ minWidth: 280, maxWidth: 360 }}
+        onClick={() => removePopup(popup.id)}
+      >
+        {popup.sender_avatar ? (
+          <img src={popup.sender_avatar} alt="avatar" className="w-12 h-12 rounded-full border border-blue-200 object-cover" />
+        ) : (
+          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-xl font-semibold text-blue-600 border border-blue-200">
+            {popup.sender_username.charAt(0).toUpperCase()}
           </div>
+        )}
+        <div className="flex flex-col justify-center flex-1">
+          <span className="text-base font-semibold text-blue-700 mb-1">{popup.sender_username}</span>
+          <span className="text-sm text-gray-800 font-normal mb-1">
+            {popup.content}
+          </span>
+          <span className="text-xs text-gray-400">
+            {new Date(popup.created_at).toLocaleTimeString()}
+          </span>
         </div>
-      ))}
-    </div>
+      </div>
+    ))}
+  </div>
   );
 }
