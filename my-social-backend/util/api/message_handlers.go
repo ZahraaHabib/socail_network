@@ -228,9 +228,6 @@ func SendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Broadcast updated unread message count to receiver
-	BroadcastUnreadMessageCountToUser(int(receiverID))
-
 	// 3. CONVERSATION LIST UPDATE
 	// Broadcast conversation update to receiver
 	BroadcastToUser(receiverID, "conversation_updated", map[string]interface{}{
