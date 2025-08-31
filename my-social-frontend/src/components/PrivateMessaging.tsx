@@ -20,6 +20,7 @@ interface MessageResponse {
   created_at: string;
   is_sent_by_viewer: boolean;
   status?: string;
+  is_read?: boolean; // true if the message has been seen/read
 }
 
 interface PrivateMessagingProps {
@@ -82,13 +83,21 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
     });
   }, [onMessage]);
 
+  // Send 'message_read' for unread messages when chat is open or new messages arrive
+  useEffect(() => {
+  if (!selectedUser || !messages.length || !safeSendMessage) return;
+  const unread = messages.filter(m => !m.is_sent_by_viewer && !m.is_read);
+  if (unread.length > 0) {
+    unread.forEach(msg => {
+      safeSendMessage('message_read', { message_id: msg.id });
+    });
+  }
+}, [selectedUser, messages, safeSendMessage]);
   // Helper for message status icon
   function getMessageStatusIcon(message: MessageResponse) {
-    if (message.status === 'delivered') {
-      return <span title="Delivered" className="text-green-500 ml-2">✔✔</span>;
-    }
-    if (message.status === 'sent') {
-      return <span title="Sent" className="text-gray-400 ml-2">✔</span>;
+    // Only show green check if is_read is true
+    if (message.is_sent_by_viewer && message.is_read) {
+      return <span title="Seen" className="text-green-500 ml-2">✔</span>;
     }
     return null;
   }
@@ -108,7 +117,11 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
       });
       if (response.ok) {
         const data = await response.json();
-        const loadedMessages = data.reverse();
+        // Set is_sent_by_viewer for each message
+        const loadedMessages = data.reverse().map((m: MessageResponse) => ({
+          ...m,
+          is_sent_by_viewer: m.sender_id === currentUserId
+        }));
         setMessagesByUser(prev => {
           const prevMsgs = prev[userId] || [];
           // Avoid duplicates by filtering out already loaded message IDs
@@ -182,7 +195,22 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
         });
       }
     });
-    // Optionally listen for message delivery confirmation, etc.
+    // Listen for message_read events from backend and update UI
+    onMessage('message_read', (data: { message_id: number }) => {
+      setMessages(prev => prev.map(m =>
+        m.id === data.message_id ? { ...m, is_read: true } : m
+      ));
+      setMessagesByUser(byUser => {
+        if (!selectedUser) return byUser;
+        const msgs = byUser[selectedUser.id] || [];
+        return {
+          ...byUser,
+          [selectedUser.id]: msgs.map(m =>
+            m.id === data.message_id ? { ...m, is_read: true } : m
+          )
+        };
+      });
+    });
   }, [onMessage, selectedUser]);
 
   // Listen for typing events from WebSocket
@@ -201,6 +229,17 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
   }, [onMessage, selectedUser]);
+
+  // Send 'message_read' for unread messages when chat is open or new messages arrive
+  useEffect(() => {
+    if (!selectedUser || !messages.length || !safeSendMessage) return;
+    const unread = messages.filter(m => !m.is_sent_by_viewer && !m.is_read);
+    if (unread.length > 0) {
+      unread.forEach(msg => {
+        safeSendMessage('message_read', { message_id: msg.id });
+      });
+    }
+  }, [selectedUser, messages, safeSendMessage]);
 
   // Typing indicator
   useEffect(() => {
@@ -294,8 +333,9 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
               {messages.length === 0 ? (
                 <div className="text-center text-gray-500 py-4">No messages yet.</div>
               ) : (
-                <>
-                  {messages.map((message) => (
+                messages.map((message) => {
+                  console.log('Render message:', message);
+                  return (
                     <div key={message.id} className={`flex ${message.is_sent_by_viewer ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-xs rounded-lg px-4 py-2 text-sm break-words whitespace-pre-wrap ${message.is_sent_by_viewer ? 'bg-blue-500 text-white' : 'bg-gray-200 text-black'}`} style={{ wordBreak: 'break-word' }}>
                         <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{message.content}</p>
@@ -305,8 +345,8 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
                         </div>
                       </div>
                     </div>
-                  ))}
-                </>
+                  );
+                })
               )}
               {/* Typing indicator */}
               {isOtherUserTyping && (

@@ -167,7 +167,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case "message_read":
-			// Update message as read and notify sender
+			// Update message as read and notify both sender and receiver
 			var req struct {
 				MessageID int64 `json:"message_id"`
 			}
@@ -177,7 +177,17 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 					// Update DB for read status
 					_, err := database.DB.Exec(`UPDATE private_messages SET is_read = 1 WHERE id = ?`, req.MessageID)
 					if err == nil {
-						// Optionally notify sender
+						// Fetch sender ID for the message
+						var senderID int64
+						err := database.DB.QueryRow(`SELECT sender_id FROM private_messages WHERE id = ?`, req.MessageID).Scan(&senderID)
+						if err == nil {
+							// Notify sender
+							BroadcastToUser(senderID, "message_read", map[string]interface{}{
+								"message_id": req.MessageID,
+								"read_at":    time.Now(),
+							})
+						}
+						// Notify receiver (the one who read)
 						BroadcastToUser(userID, "message_read", map[string]interface{}{
 							"message_id": req.MessageID,
 							"read_at":    time.Now(),
