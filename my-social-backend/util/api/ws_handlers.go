@@ -148,6 +148,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			// Broadcast to receiver
 			BroadcastToUser(req.ReceiverID, "direct_message", response)
+
 			// Send confirmation to sender
 			conn.WriteJSON(WSMessage{Type: "direct_message_sent", Data: response})
 		case "typing_indicator":
@@ -184,13 +185,13 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 							// Notify sender
 							BroadcastToUser(senderID, "message_read", map[string]interface{}{
 								"message_id": req.MessageID,
-								"read_at":    time.Now(),
+								// read_at removed
 							})
 						}
 						// Notify receiver (the one who read)
 						BroadcastToUser(userID, "message_read", map[string]interface{}{
 							"message_id": req.MessageID,
-							"read_at":    time.Now(),
+							// read_at removed
 						})
 					}
 				}
@@ -644,12 +645,8 @@ func deliverUnreadDirectMessages(userID int64, conn *websocket.Conn) {
 		// Send each unread message
 		if err := conn.WriteJSON(msg); err != nil {
 			log.Printf("Error delivering offline direct message to user %d: %v", userID, err)
-		} else {
-			// Mark as read after delivery
-			_, err := database.DB.Exec(`UPDATE private_messages SET is_read = 1, read_at = ? WHERE id = ?`, time.Now(), messageID)
-			if err != nil {
-				log.Printf("Error marking message %d as read: %v", messageID, err)
-			}
 		}
+		// To mark as read when viewed, use:
+		// database.DB.Exec(`UPDATE private_messages SET is_read = 1 WHERE id = ?`, messageID)
 	}
 }

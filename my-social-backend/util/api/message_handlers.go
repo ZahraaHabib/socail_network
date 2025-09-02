@@ -364,67 +364,10 @@ func GetConversationsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetUnreadMessagesCountHandler returns the total count of unread messages for a user
-func GetUnreadMessagesCountHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(middleware.UserIDKey).(int64)
-	if !ok || userID == 0 {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Query total unread messages count across all conversations
-	var totalUnreadCount int
-	err := database.DB.QueryRow(`
-		SELECT COALESCE(SUM(
-			CASE 
-				WHEN pm.receiver_id = ? AND pm.is_read = FALSE 
-				THEN 1 
-				ELSE 0 
-			END
-		), 0) as total_unread
-		FROM private_messages pm
-		WHERE pm.receiver_id = ?
-	`, userID, userID).Scan(&totalUnreadCount)
-
-	if err != nil {
-		log.Printf("Error getting total unread messages count for user %d: %v", userID, err)
-		http.Error(w, "Failed to fetch unread messages count", http.StatusInternalServerError)
-		return
-	}
-
-	response := map[string]int{"unread_count": totalUnreadCount}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
+// Removed: GetUnreadMessagesCountHandler (moved to new message notification handler file)
 
 // BroadcastUnreadMessageCountToUser sends updated unread message count via WebSocket
-func BroadcastUnreadMessageCountToUser(userID int) {
-	// Query total unread messages count
-	var totalUnreadCount int
-	err := database.DB.QueryRow(`
-		SELECT COALESCE(SUM(
-			CASE 
-				WHEN pm.receiver_id = ? AND pm.is_read = FALSE 
-				THEN 1 
-				ELSE 0 
-			END
-		), 0) as total_unread
-		FROM private_messages pm
-		WHERE pm.receiver_id = ?
-	`, userID, userID).Scan(&totalUnreadCount)
-
-	if err != nil {
-		log.Printf("Error getting unread message count for user %d: %v", userID, err)
-		return
-	}
-
-	// Broadcast the count update via WebSocket
-	data := map[string]interface{}{
-		"unread_count": totalUnreadCount,
-	}
-
-	BroadcastToUser(int64(userID), "message_count_update", data)
-	log.Printf("Broadcasted unread message count (%d) to user %d via WebSocket", totalUnreadCount, userID)
-}
+// Removed: BroadcastUnreadMessageCountToUser (moved to new message notification handler file)
 
 // GET /chat/users - Get users that can be chatted with (following or being followed)
 func GetChattableUsersHandler(w http.ResponseWriter, r *http.Request) {
@@ -703,8 +646,7 @@ func MarkMessageAsReadHandler(w http.ResponseWriter, r *http.Request) {
 		// Removed 'read_at' field since it does not exist in the database
 	})
 
-	// Broadcast updated unread message count to receiver
-	BroadcastUnreadMessageCountToUser(int(userID))
+	// Removed: Broadcast updated unread message count to receiver (moved to new message notification handler file)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Message marked as read"})

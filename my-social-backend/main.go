@@ -70,6 +70,9 @@ func main() {
 	mux.HandleFunc("POST /logout", api.LogoutHandler)
 	mux.Handle("GET /checkAuth", middleware.AuthMiddleware(http.HandlerFunc(localCheckAuth)))
 
+	// Message notification handler (NEW)
+	mux.Handle("GET /messages/unread", middleware.AuthMiddleware(http.HandlerFunc(api.GetUnreadMessagesHandler)))
+
 	// Post handlers
 	mux.Handle("POST /posts", middleware.AuthMiddleware(http.HandlerFunc(api.CreatePostHandler)))
 	mux.Handle("GET /posts", middleware.AuthMiddleware(http.HandlerFunc(api.GetPostsHandler)))

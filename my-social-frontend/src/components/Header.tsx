@@ -119,15 +119,14 @@ export default function Header() {
           <div className="transform hover:scale-105 transition-transform duration-200">
             <NotificationBell />
           </div>
-          <div className="relative mr-1 flex items-center" title="Messages">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6 text-white/90 group-hover:text-white transition-colors">
-              <rect x="3" y="6" width="18" height="12" rx="2" fill="#fff" fillOpacity="0.1" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l9 7 9-7" />
-            </svg>
-            <div className="absolute -top-1 -right-2">
-              <MessageNotificationBadge />
+          <MessageNotificationBadge>
+            <div className="relative mr-1 flex items-center cursor-pointer" title="Messages">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6 text-white/90 group-hover:text-white transition-colors">
+                <rect x="3" y="6" width="18" height="12" rx="2" fill="#fff" fillOpacity="0.1" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l9 7 9-7" />
+              </svg>
             </div>
-          </div>
+          </MessageNotificationBadge>
           <button 
             onClick={handleLogout}
             className="group relative bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-5 py-2 rounded-xl font-medium transition-all duration-300 flex items-center gap-2 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 border border-red-400/30 whitespace-nowrap"

@@ -1,103 +1,93 @@
-'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+'use client';
+import { useEffect, useState, useRef, ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-export default function MessageNotificationBadge() {
-  const { isAuthenticated, loading: authLoading, wsConnected, onMessage } = useAuth();
-  const [unreadCount, setUnreadCount] = useState(0);
+interface Props {
+  children: ReactNode;
+}
 
-  const fetchUnreadCount = useCallback(async () => {
+export default function MessageNotificationBadge({ children }: Props) {
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState<any[]>([]);
+  const dropdownRef = useRef(null);
+
+  // Fetch unread count
+  useEffect(() => {
     if (!isAuthenticated || authLoading) return;
-    
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
-      const res = await fetch('http://localhost:8080/messages/unread-count', {
-        credentials: 'include',
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (res.ok) {
-        const data = await res.json();
-        setUnreadCount(data.unread_count || 0);
-      } else if (res.status === 401) {
-  // ...existing code...
-        setUnreadCount(0);
-      } else {
-        console.error('Failed to fetch unread message count:', res.status, res.statusText);
-        setUnreadCount(0);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name !== 'AbortError') {
-        console.error('Error fetching unread message count:', error);
-      }
-      setUnreadCount(0);
-    }
+    fetch('http://localhost:8080/messages/unread-count', {
+      credentials: 'include',
+    })
+      .then(res => res.json())
+      .then(data => setUnreadCount(data.unread_count || 0))
+      .catch(() => setUnreadCount(0));
   }, [isAuthenticated, authLoading]);
 
+  // Fetch unread messages when dropdown opens
   useEffect(() => {
-    if (isAuthenticated && !authLoading) {
-      const timer = setTimeout(() => {
-        fetchUnreadCount();
-      }, 1000);
-      
-      // Poll for message count updates every 2 minutes as fallback
-      const interval = setInterval(fetchUnreadCount, 120000);
-      
-      return () => {
-        clearTimeout(timer);
-        clearInterval(interval);
-      };
-    } else {
-      setUnreadCount(0);
+    if (!dropdownOpen || !isAuthenticated || authLoading) return;
+    fetch('http://localhost:8080/messages/unread', {
+      credentials: 'include',
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setUnreadMessages(data);
+        } else {
+          setUnreadMessages([]);
+        }
+      })
+      .catch(() => setUnreadMessages([]));
+  }, [dropdownOpen, isAuthenticated, authLoading]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !(dropdownRef.current as any).contains(e.target)) {
+        setDropdownOpen(false);
+      }
     }
-  }, [isAuthenticated, authLoading, fetchUnreadCount]);
+    if (dropdownOpen) {
+      document.addEventListener('mousedown', handleClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+    };
+  }, [dropdownOpen]);
 
-  // WebSocket integration for real-time message count updates
-  useEffect(() => {
-    if (!onMessage || !wsConnected || !isAuthenticated) return;
-
-  // ...existing code...
-
-    // Listen for message count updates
-    onMessage('message_count_update', (data: { unread_count: number }) => {
-  // ...existing code...
-      setUnreadCount(data.unread_count || 0);
-    });
-
-    // Listen for new messages to update count
-    onMessage('new_message', (data: any) => {
-  // ...existing code...
-      // Use a simple fetch instead of the callback to avoid dependency issues
-      fetch('http://localhost:8080/messages/unread-count', {
-        credentials: 'include',
-      }).then(res => res.json()).then(data => {
-        setUnreadCount(data.unread_count || 0);
-      }).catch(err => console.error('Error fetching unread count:', err));
-    });
-
-    // Listen for new message popups to update count  
-    onMessage('new_message_popup', (data: any) => {
-  // ...existing code...
-      // Use a simple fetch instead of the callback to avoid dependency issues
-      fetch('http://localhost:8080/messages/unread-count', {
-        credentials: 'include',
-      }).then(res => res.json()).then(data => {
-        setUnreadCount(data.unread_count || 0);
-      }).catch(err => console.error('Error fetching unread count:', err));
-    });
-
-  }, [onMessage, wsConnected, isAuthenticated]);
-
-  if (!isAuthenticated || authLoading || unreadCount === 0) return null;
+  if (!isAuthenticated || authLoading) return null;
 
   return (
-    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-      {unreadCount > 99 ? '99+' : unreadCount}
-    </span>
+    <div className="relative" ref={dropdownRef}>
+      <div onClick={() => setDropdownOpen(v => !v)}>
+        {children}
+        {unreadCount > 0 && (
+          <span
+            className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center"
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </div>
+      {dropdownOpen && (
+        <div className="absolute right-0 mt-2 w-80 bg-gradient-to-br from-indigo-100 via-purple-100 to-blue-100 shadow-2xl rounded-xl z-50 border border-gray-300 p-2">
+          {(!unreadMessages || unreadMessages.length === 0) ? (
+            <div className="p-4 text-gray-500 text-center">No unread messages</div>
+          ) : (
+            <ul className="max-h-96 overflow-y-auto divide-y divide-gray-200">
+              {unreadMessages.map((msg: any) => (
+                <li key={msg.id} className="p-4 hover:bg-indigo-50 rounded-lg transition-colors">
+                  <div className="font-semibold text-indigo-700 truncate">{msg.username}</div>
+                  <div className="text-sm text-gray-800 truncate">{msg.content}</div>
+                  <div className="text-xs text-gray-400 mt-1">{new Date(msg.created_at).toLocaleString()}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
