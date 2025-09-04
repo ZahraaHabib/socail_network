@@ -24,9 +24,21 @@ var upgrader = websocket.Upgrader{
 
 // Store active WebSocket connections per user
 var (
-	activeConnections = make(map[int64]*websocket.Conn)
+	activeConnections = make(map[int64]*WSClient)
 	connectionsMutex  sync.RWMutex
 )
+
+// WSClient wraps a websocket.Conn and provides a mutex for safe writes
+type WSClient struct {
+	Conn       *websocket.Conn
+	writeMutex sync.Mutex
+}
+
+func (c *WSClient) WriteJSON(v interface{}) error {
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+	return c.Conn.WriteJSON(v)
+}
 
 type WSMessage struct {
 	Type string      `json:"type"`
@@ -57,11 +69,12 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
-	defer conn.Close()
+	client := &WSClient{Conn: conn}
+	defer client.Conn.Close()
 
 	// Store connection
 	connectionsMutex.Lock()
-	activeConnections[userID] = conn
+	activeConnections[userID] = client
 	connectionsMutex.Unlock()
 
 	log.Printf("User %d connected via WebSocket", userID)
@@ -85,11 +98,11 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		Type: "connected",
 		Data: map[string]string{"status": "connected"},
 	}
-	conn.WriteJSON(welcomeMsg)
+	client.WriteJSON(welcomeMsg)
 
-	deliverUnreadDirectMessages(userID, conn)
+	deliverUnreadDirectMessages(userID, client)
 	// Check for unread message notifications (group, etc.)
-	checkAndSendOfflineMessageNotifications(userID, conn)
+	checkAndSendOfflineMessageNotifications(userID, client)
 
 	// Listen for messages from client
 	for {
@@ -118,7 +131,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if req.Content == "" {
-				conn.WriteJSON(WSMessage{Type: "error", Data: "Message content cannot be empty"})
+				client.WriteJSON(WSMessage{Type: "error", Data: "Message content cannot be empty"})
 				continue
 			}
 			// Save message to database
@@ -126,7 +139,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			result, err := database.DB.Exec(`INSERT INTO private_messages (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`, userID, req.ReceiverID, req.Content, now)
 			if err != nil {
 				log.Printf("Error saving direct message: %v", err)
-				conn.WriteJSON(WSMessage{Type: "error", Data: "Failed to save message"})
+				client.WriteJSON(WSMessage{Type: "error", Data: "Failed to save message"})
 				continue
 			}
 			messageID, _ := result.LastInsertId()
@@ -149,8 +162,40 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// Broadcast to receiver
 			BroadcastToUser(req.ReceiverID, "direct_message", response)
 
+			// Always send updated unread count to recipient (online or offline)
+			var unreadCount int
+			err = database.DB.QueryRow(`SELECT COUNT(*) FROM private_messages WHERE receiver_id = ? AND is_read = 0`, req.ReceiverID).Scan(&unreadCount)
+			if err == nil {
+				// You can use conversation_updated or another event name
+				BroadcastToUser(req.ReceiverID, "conversation_updated", map[string]interface{}{
+					"unread_count":    unreadCount,
+					"last_message":    req.Content,
+					"message_time":    now,
+					"sender_id":       userID,
+					"sender_username": username,
+				})
+			}
+
+			// If recipient is offline, send offline_messages_notification instantly
+			connectionsMutex.RLock()
+			_, isOnline := activeConnections[req.ReceiverID]
+			connectionsMutex.RUnlock()
+			if !isOnline {
+				if unreadCount > 0 {
+					notification := WSMessage{
+						Type: "offline_messages_notification",
+						Data: map[string]interface{}{
+							"count":     unreadCount,
+							"message":   fmt.Sprintf("You have %d new message(s) while you were offline", unreadCount),
+							"timestamp": time.Now(),
+						},
+					}
+					BroadcastToUser(req.ReceiverID, "offline_messages_notification", notification.Data)
+				}
+			}
+
 			// Send confirmation to sender
-			conn.WriteJSON(WSMessage{Type: "direct_message_sent", Data: response})
+			client.WriteJSON(WSMessage{Type: "direct_message_sent", Data: response})
 		case "typing_indicator":
 			// Broadcast typing status to the other user in the conversation
 			var req struct {
@@ -201,18 +246,18 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			// Optionally update last-seen or keep connection alive
 			// You can update a last-seen timestamp in DB if needed
 			// For now, just acknowledge
-			conn.WriteJSON(WSMessage{Type: "heartbeat_ack", Data: "ok"})
+			client.WriteJSON(WSMessage{Type: "heartbeat_ack", Data: "ok"})
 
 		case "open_conversation":
 			// Mark conversation as open for this user (for instant delivery/read)
 			// You can store this state in memory or DB if needed
 			// For now, just acknowledge
-			conn.WriteJSON(WSMessage{Type: "open_conversation_ack", Data: "ok"})
+			client.WriteJSON(WSMessage{Type: "open_conversation_ack", Data: "ok"})
 		case "ping":
-			conn.WriteJSON(WSMessage{Type: "pong", Data: "pong"})
+			client.WriteJSON(WSMessage{Type: "pong", Data: "pong"})
 
 		case "request_online_status":
-			sendOnlineStatusToUser(userID, conn)
+			sendOnlineStatusToUser(userID, client)
 
 		case "group_message":
 			var req struct {
@@ -242,13 +287,13 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
             `, req.GroupID, userID).Scan(&isMember)
 
 			if err != nil || !isMember {
-				conn.WriteJSON(WSMessage{Type: "error", Data: "Not a group member"})
+				client.WriteJSON(WSMessage{Type: "error", Data: "Not a group member"})
 				continue
 			}
 
 			// Validate content
 			if req.Content == "" {
-				conn.WriteJSON(WSMessage{Type: "error", Data: "Message content cannot be empty"})
+				client.WriteJSON(WSMessage{Type: "error", Data: "Message content cannot be empty"})
 				continue
 			}
 
@@ -261,7 +306,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			if err != nil {
 				log.Printf("Error saving group message: %v", err)
-				conn.WriteJSON(WSMessage{Type: "error", Data: "Failed to save message"})
+				client.WriteJSON(WSMessage{Type: "error", Data: "Failed to save message"})
 				continue
 			}
 
@@ -320,7 +365,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			}()
 
 			// Send confirmation to sender
-			conn.WriteJSON(WSMessage{Type: "group_message_sent", Data: response})
+			client.WriteJSON(WSMessage{Type: "group_message_sent", Data: response})
 
 		default:
 			log.Printf("Unknown message type from user %d: %s", userID, msg.Type)
@@ -331,7 +376,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 // Broadcast message to a specific user
 func BroadcastToUser(receiverID int64, msgType string, data interface{}) {
 	connectionsMutex.RLock()
-	conn, exists := activeConnections[receiverID]
+	client, exists := activeConnections[receiverID]
 	connectionsMutex.RUnlock()
 
 	if exists {
@@ -339,7 +384,7 @@ func BroadcastToUser(receiverID int64, msgType string, data interface{}) {
 			Type: msgType,
 			Data: data,
 		}
-		err := conn.WriteJSON(msg)
+		err := client.WriteJSON(msg)
 		if err != nil {
 			log.Printf("Error broadcasting to user %d: %v", receiverID, err)
 			// Remove dead connection
@@ -425,7 +470,7 @@ func GetOnlineGroupMembers(groupID int64) []int64 {
 }
 
 // checkAndSendOfflineMessageNotifications checks for unread message notifications and sends them to the user
-func checkAndSendOfflineMessageNotifications(userID int64, conn *websocket.Conn) {
+func checkAndSendOfflineMessageNotifications(userID int64, client *WSClient) {
 	// Query for unread message notifications
 	query := `
         SELECT COUNT(*) as count, GROUP_CONCAT(n.actor_id) as sender_ids
@@ -452,7 +497,7 @@ func checkAndSendOfflineMessageNotifications(userID int64, conn *websocket.Conn)
 			},
 		}
 
-		err := conn.WriteJSON(notification)
+		err := client.WriteJSON(notification)
 		if err != nil {
 			log.Printf("Error sending offline message notification to user %d: %v", userID, err)
 		}
@@ -528,7 +573,7 @@ func BroadcastUserStatusChange(userID int64, isOnline bool) {
 }
 
 // sendOnlineStatusToUser sends current online status of all chattable users to a specific user
-func sendOnlineStatusToUser(userID int64, conn *websocket.Conn) {
+func sendOnlineStatusToUser(userID int64, client *WSClient) {
 	// Get all users this user can chat with (mutual follows, followers, following)
 	var chattableUserIDs []int64
 
@@ -588,7 +633,7 @@ func sendOnlineStatusToUser(userID int64, conn *websocket.Conn) {
 				"user_id": onlineUserID,
 			},
 		}
-		if err := conn.WriteJSON(statusMsg); err != nil {
+		if err := client.WriteJSON(statusMsg); err != nil {
 			log.Printf("Error sending online status to user %d: %v", userID, err)
 			break
 		}
@@ -608,15 +653,15 @@ func BroadcastLikeUpdate(postID int64, likeCount, dislikeCount int) {
 
 	connectionsMutex.RLock()
 	defer connectionsMutex.RUnlock()
-	for userID, conn := range activeConnections {
-		if err := conn.WriteJSON(msg); err != nil {
+	for userID, client := range activeConnections {
+		if err := client.WriteJSON(msg); err != nil {
 			log.Printf("Error broadcasting like update to user %d: %v", userID, err)
 		}
 	}
 }
 
 // Deliver unread direct messages to user when they reconnect
-func deliverUnreadDirectMessages(userID int64, conn *websocket.Conn) {
+func deliverUnreadDirectMessages(userID int64, client *WSClient) {
 	query := `SELECT pm.id, pm.sender_id, u.username, pm.content, pm.created_at FROM private_messages pm JOIN users u ON pm.sender_id = u.id WHERE pm.receiver_id = ? AND pm.is_read = 0 ORDER BY pm.created_at ASC`
 	rows, err := database.DB.Query(query, userID)
 	if err != nil {
@@ -643,7 +688,7 @@ func deliverUnreadDirectMessages(userID int64, conn *websocket.Conn) {
 			},
 		}
 		// Send each unread message
-		if err := conn.WriteJSON(msg); err != nil {
+		if err := client.WriteJSON(msg); err != nil {
 			log.Printf("Error delivering offline direct message to user %d: %v", userID, err)
 		}
 		// To mark as read when viewed, use:

@@ -2,6 +2,12 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 
+type User = {
+  id: number;
+  username: string;
+  // add other fields as needed
+};
+
 type AuthContextType = {
   isAuthenticated: boolean;
   setIsAuthenticated: (auth: boolean) => void;
@@ -14,6 +20,7 @@ type AuthContextType = {
   disconnect: (() => void) | null;
   // Online user management
   onlineUsers: Set<number>;
+  user: User | null;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -22,19 +29,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
-  
+  const [user, setUser] = useState<User | null>(null);
+
   // Connect WebSocket when user is authenticated
   const shouldConnectWS = isAuthenticated;
-  // ...existing code...
   const { isConnected: wsConnected, onMessage, sendGroupMessage, sendMessage, disconnect } = useWebSocket(shouldConnectWS);
-  
+
   // Debug WebSocket connection status and request online status
   useEffect(() => {
-  // ...existing code...
-    
     // Request current online status when WebSocket connects
     if (wsConnected && sendMessage) {
-  // ...existing code...
       sendMessage('request_online_status', {});
     }
   }, [wsConnected, sendMessage]);
@@ -45,11 +49,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Global listeners that should always be active
     onMessage('connected', (data: any) => {
-  // ...existing code...
+      console.log('WebSocket connected:', data);
     });
 
     onMessage('user_online', (data: { user_id: number }) => {
-  // ...existing code...
       setOnlineUsers(prev => {
         const newSet = new Set(prev);
         newSet.add(data.user_id);
@@ -60,7 +63,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     onMessage('user_offline', (data: { user_id: number }) => {
-  // ...existing code...
       setOnlineUsers(prev => {
         const newSet = new Set(prev);
         newSet.delete(data.user_id);
@@ -72,12 +74,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   }, [onMessage, wsConnected]);
 
-  // Re-check authentication on every route change
+  // Re-check authentication and fetch user info on every route change
   useEffect(() => {
     const checkAuth = () => {
       fetch('http://localhost:8080/v2/users/me', { credentials: 'include' })
-        .then(res => setIsAuthenticated(res.ok))
-        .catch(() => setIsAuthenticated(false))
+        .then(async res => {
+          setIsAuthenticated(res.ok);
+          if (res.ok) {
+            const data = await res.json();
+            setUser({ id: data.id, username: data.username });
+          } else {
+            setUser(null);
+          }
+        })
+        .catch(() => {
+          setIsAuthenticated(false);
+          setUser(null);
+        })
         .finally(() => setLoading(false));
     };
     checkAuth();
@@ -105,7 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   sendGroupMessage,
   sendMessage,
   disconnect,
-      onlineUsers
+      onlineUsers,
+      user
     }}>
       {children}
     </AuthContext.Provider>
