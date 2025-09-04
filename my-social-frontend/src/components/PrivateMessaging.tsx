@@ -31,6 +31,9 @@ const MESSAGE_LIMIT = 10;
 const commonEmojis = ["😀", "😂", "😍", "👍", "🙏", "🎉", "😢", "😎", "🔥", "❤️", "😡", "🥳", "🤔", "😴", "😇", "🤩", "😱", "😅", "😜", "🤗", "💯"];
 
 export default function PrivateMessaging({ currentUserId }: PrivateMessagingProps) {
+  // Track if we are prepending older messages
+  const [isPrepending, setIsPrepending] = useState(false);
+
   const [users, setUsers] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   // Store messages per userId to persist conversations
@@ -104,7 +107,8 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
 
   // Load messages
   const loadMessages = async (userId: number, newOffset: number, prepend = false) => {
-    setLoading(true);
+  setLoading(true);
+  if (prepend) setIsPrepending(true);
     let prevScrollHeight = 0;
     let prevScrollTop = 0;
     if (prepend && messagesContainerRef.current) {
@@ -142,15 +146,18 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
             messagesContainerRef.current!.scrollTop = prevScrollTop + (messagesContainerRef.current!.scrollHeight - prevScrollHeight);
           }, 0);
         }
+      if (prepend) setIsPrepending(false);
       } else {
         setMessagesByUser(prev => ({ ...prev, [userId]: [] }));
         setMessages([]);
         setHasMore(false);
+      if (prepend) setIsPrepending(false);
       }
     } catch (error) {
       setMessagesByUser(prev => ({ ...prev, [userId]: [] }));
       setMessages([]);
       setHasMore(false);
+    if (prepend) setIsPrepending(false);
     } finally {
       setLoading(false);
     }
@@ -159,6 +166,12 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
   // Send message
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedUser) return;
+    // Interrupt typing animation locally
+    setIsOtherUserTyping(false);
+    // Interrupt typing animation remotely
+    if (selectedUser) {
+      safeSendMessage('typing_indicator', { receiver_id: selectedUser.id, is_typing: false });
+    }
     try {
       const response = await fetch(`http://localhost:8080/messages/${selectedUser.id}`, {
         method: 'POST',
@@ -170,10 +183,10 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
         setNewMessage("");
         // After sending, reload messages from backend to ensure UI matches database
         await loadMessages(selectedUser.id, 0);
-        // Scroll to bottom after new message
+        // Scroll to bottom after sending new message
         setTimeout(() => {
-          if (messagesContainerRef.current) {
-            messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
           }
         }, 0);
       }
@@ -191,6 +204,12 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
         setMessages(prev => {
           const updated = [...prev, message];
           setMessagesByUser(byUser => ({ ...byUser, [selectedUser.id]: updated }));
+          // Scroll to bottom after receiving new message
+          setTimeout(() => {
+            if (messagesEndRef.current) {
+              messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            }
+          }, 0);
           return updated;
         });
       }
@@ -240,6 +259,7 @@ export default function PrivateMessaging({ currentUserId }: PrivateMessagingProp
       });
     }
   }, [selectedUser, messages, safeSendMessage]);
+  // Auto-scroll to newest message when messages change
 
   // Typing indicator
   useEffect(() => {
